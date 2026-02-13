@@ -73,12 +73,7 @@ int main(void)
         'A','C','B','C','A','C','A','D','A','D','B','C','B','C','A','D','B','C','B','C','B'
     };
     int pattern_len = sizeof(pattern) / sizeof(pattern[0]);
-
-    while (1)
-    {
-        PORTC = LEDS_OFF; //make sure LED is off
-
-        while ( (PIND & 0b00000100) != 0 )//no press: pd2=1, press, pd2=0,out of while loop
+	 while ( (PIND & 0b00000100) != 0 )//no press: pd2=1, press, pd2=0,out of while loop
         {
             // Keep waiting 
         }
@@ -86,6 +81,11 @@ int main(void)
         {
             /* Wait until switch released */
         }
+    while (1)
+    {
+        PORTC = LEDS_OFF; //make sure LED is off
+
+       
 
         for (int i = 0; i < pattern_len; i++)
         {
