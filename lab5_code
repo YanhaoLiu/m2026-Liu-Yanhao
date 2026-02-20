@@ -1,0 +1,162 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+#define FREQ_CLK 1000000  
+
+volatile unsigned char current_led = 0; 
+volatile unsigned char stage = 0;         // 0 = normal scroll (0..5), 1 = after LED6 latched (3..5)
+volatile unsigned char led6_latched = 0;  // 1 after successful INT0 event
+volatile unsigned char led7_latched = 0;  // 1 after successful INT1 event
+volatile int i = 0;                     
+
+int debounce = 50;
+int on_ms   = 120; 
+int off_ms  = 120;
+
+void wait(volatile int multiple);
+
+int main(void)
+{
+
+    DDRD  = 0<<PD2 | 0<<PD3;     
+    PORTD = 1<<PD2 | 1<<PD3;              // enable pull-up resistors
+
+    DDRC  = 0b11111111;                   
+    PORTC = 0b11111111;                   // all OFF (active low)
+
+    // PB0 and PB1 are LED6 and LED7 (active low) set as outputs, start OFF
+    DDRB  = DDRB | (1<<PB0) | (1<<PB1);
+    PORTB = PORTB | (1<<PB0) | (1<<PB1);
+
+    EICRA = 1<<ISC01 | 0<<ISC00 | 1<<ISC11 | 0<<ISC10;  // falling edge on INT0 & INT1
+    EIMSK = 1<<INT1 | 1<<INT0;                           // enable INT1 and INT0
+    sei();                                               // global enable
+
+    // 0 = ON, 1 = OFF
+
+    unsigned char pattern_all_off = 0b11111111;
+    unsigned char pattern[6] = {
+        0b11111110, // LED0 on  (PC0=0)
+        0b11111101, // LED1 on  (PC1=0)
+        0b11111011, // LED2 on  (PC2=0)
+        0b11110111, // LED3 on  (PC3=0)
+        0b11101111, // LED4 on  (PC4=0)
+        0b11011111  // LED5 on  (PC5=0)
+    };
+
+    while(1)
+    {
+        if (stage == 0) {
+            // Scroll LED0 to LED5
+            for (unsigned char k = 0; k < 6; k++) {
+                PORTC = pattern_all_off;     // all off
+                wait(off_ms);
+
+                current_led = k;             // snapshot for ISR checks
+                PORTC = pattern[k];          // turn on one LED
+                wait(on_ms);
+
+                PORTC = pattern_all_off;     // turn off
+                wait(off_ms);
+            }
+        }
+        else {
+            // After LED6 latched
+            for (unsigned char k = 3; k < 6; k++) {
+                PORTC = pattern_all_off;
+                wait(off_ms);
+
+                current_led = k;
+                PORTC = pattern[k];
+                wait(on_ms);
+
+                PORTC = pattern_all_off;
+                wait(off_ms);
+            }
+        }
+    }
+
+    return 0;
+}
+
+// ISR for INT0 (PD2 / Switch 0)
+ISR(INT0_vect)
+{
+
+    if ((current_led == 2) && (stage == 0) && (led6_latched == 0)) {
+
+        // Turn ON LED6 
+        PORTB = PORTB & 0b11111110;   // clear PB0, keep other bits unchanged
+
+        led6_latched = 1;
+        stage = 1;                    // restrict scrolling to LED3-5
+        wait(debounce);               // debounce
+
+        // Wait for switch release: PD2 returns HIGH (because pull-up)
+        while ( (PIND & 0b00000100) == 0 ) {
+            i = 0;
+        }
+        wait(debounce);
+    }
+    else {
+        wait(debounce);
+        while ( (PIND & 0b00000100) == 0 ) { i = 0; }
+        wait(debounce);
+    }
+
+    // Clear INT0 flag by writing 1 to it
+    EIFR = 0b00000001;
+}
+
+// ISR for INT1 (PD3 / Switch 1)
+ISR(INT1_vect)
+{
+    if ((led6_latched == 1) && (led7_latched == 0) && (current_led == 5)) {
+
+        // Turn ON LED7 
+        PORTB = PORTB & 0b11111101;   // clear PB1
+
+        led7_latched = 1;
+        wait(debounce);
+
+        // Wait for switch release: PD3 returns HIGH
+        while ( (PIND & 0b00001000) == 0 ) {
+            i = 0;
+        }
+        wait(debounce);
+
+        // Keep LED7 on for 3 seconds (Action 2)
+        wait(188);
+
+        // Turn OFF all LEDs and reset to original scrolling
+        PORTC = 0b11111111;                 // all off (active low)
+        PORTB = PORTB | 0b00000011;         // set PB0 and PB1 high (LED6 & LED7 off)
+
+        stage = 0;
+        led6_latched = 0;
+        led7_latched = 0;
+        current_led = 0;
+    }
+    else {
+  
+        wait(debounce);
+        while ( (PIND & 0b00001000) == 0 ) { i = 0; }
+        wait(debounce);
+    }
+
+    // Clear INT1 flag by writing 1 to it 
+    EIFR = 0b00000010;
+}
+
+//wait() function
+void wait(volatile int N)
+{
+    while (N > 0) {
+        TCCR0A = 0x00;        // normal mode
+        TCNT0  = 0;           // preload
+        TCCR0B = 0b00000011;  // start TIMER0, prescaler=64 
+        while (TCNT0 < 0xFA); // ~1 msec with 16MHz & /64 
+        TCCR0B = 0x00;        // stop TIMER0
+        N--;
+    }
+}
